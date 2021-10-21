@@ -3,7 +3,7 @@
 sudo apt install git
 
 #Cloning magma-local scripts 
-git clone https://github.com/ShubhamTatvamasi/magma-local
+git clone https://github.com/magmaevaluation/magmaEvaluationOrc8r.git
 
 #Install Curl
 sudo apt install curl
@@ -108,9 +108,6 @@ cd prod
 sudo mkdir certs
 cd certs
 sudo ../01-generate-secrets.sh
-
-#sudo helm repo add magma-charts-152 https://shubhamtatvamasi.github.io/magma-charts-152
-#sudo helm repo update
 
 sudo chmod +r *
 
