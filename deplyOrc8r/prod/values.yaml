@@ -1,0 +1,98 @@
+nms:
+  magmalte:
+    image:
+      repository: registry.hub.docker.com/magmaevaluation/magmalte
+      tag: 1.6
+      pullPolicy: IfNotPresent
+
+    env:
+      api_host: orc8r-nginx-proxy
+      mysql_host: postgresql
+      mysql_user: postgres
+      mysql_pass: postgres
+
+  nginx:
+    image:
+      pullPolicy: IfNotPresent
+
+    service:
+      type: LoadBalancer
+
+  secret:
+    certs: orc8r-secrets-certs
+
+nginx:
+
+  replicas: 1
+
+  image:
+    repository: registry.hub.docker.com/magmaevaluation/nginx
+    tag: 1.6
+
+  spec:
+    hostname:
+
+  service:
+    type: LoadBalancer
+
+controller:
+
+  replicas: 1
+
+  image:
+    repository: registry.hub.docker.com/magmaevaluation/controller
+    tag: 1.6
+
+metrics:
+  prometheus:
+    includeOrc8rAlerts: true
+    create: true
+
+  prometheusCache:
+    create: true
+    limit: 500000
+
+  prometheusConfigurer:
+    create: true
+
+  alertmanager:
+    create: true
+
+  alertmanagerConfigurer:
+    create: true
+
+  metrics:
+    volumes:
+      prometheusConfig:
+        volumeSpec:
+          persistentVolumeClaim:
+            claimName: promcfg
+      prometheusData:
+        volumeSpec:
+          persistentVolumeClaim:
+            claimName: promdata
+
+  userGrafana:
+    image:
+      tag: 6.7.6
+
+    volumes:
+      datasources:
+        volumeSpec:
+          persistentVolumeClaim:
+            claimName: grafanadatasources
+
+      dashboardproviders:
+        volumeSpec:
+          persistentVolumeClaim:
+            claimName: grafanaproviders
+
+      dashboards:
+        volumeSpec:
+          persistentVolumeClaim:
+            claimName: grafanadashboards
+
+      grafanaData:
+        volumeSpec:
+          persistentVolumeClaim:
+            claimName: grafanadata

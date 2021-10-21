@@ -1,0 +1,267 @@
+#################################Prerequisite for Orchestrator and Kind Installation##################################################
+#Install git 
+sudo apt install git
+
+#Cloning magma-local scripts 
+git clone https://github.com/ShubhamTatvamasi/magma-local
+
+#Install Curl
+sudo apt install curl
+`
+#Installing Kind [https://octopus.com/blog/testing-with-kind], Prior versionof kind will create problem i.e. NotReady state of kind node.
+curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.11.1/kind-linux-amd64
+chmod +x ./kind
+sudo mv ./kind /usr/local/bin
+
+#Installing Kubectl [https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/]
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+curl -LO "https://dl.k8s.io/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl.sha256"
+echo "$(<kubectl.sha256) kubectl" | sha256sum --check
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+kubectl version
+
+#Installing kubctx and kubens 
+sudo git clone https://github.com/ahmetb/kubectx /opt/kubectx
+sudo ln -s /opt/kubectx/kubectx /usr/local/bin/kubectx
+sudo ln -s /opt/kubectx/kubens /usr/local/bin/kubens
+
+#Installing docker
+sudo apt install docker
+sudo apt install docker.io
+
+#Install Helm
+curl -LO https://get.helm.sh/helm-v3.7.1-linux-amd64.tar.gz
+tar -xzvf helm-v3.7.1-linux-amd64.tar.gz
+chmod +x linux-amd64/helm
+sudo mv linux-amd64/helm /usr/local/bin
+
+#############################Steps for Orchestrator Deployment over Kind Cluster################################################
+#Switch to directory checked out as magmaEvaluationOrc8r
+cd magmaEvaluationOrc8r
+
+#Create Kind Cluster
+sudo kind create cluster
+
+#Check if kind cluster created
+sudo kubectl get nodes -owide
+
+#Also enable [LoadBalancer](https://kind.sigs.k8s.io/docs/user/loadbalancer/) for Kind cluster.
+sudo kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.9.6/manifests/namespace.yaml
+sudo kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.9.6/manifests/metallb.yaml
+sudo kubectl create secret generic -n metallb-system memberlist --from-literal=secretkey="$(openssl rand -base64 128)"
+sudo docker network inspect -f '{{.IPAM.Config}}' kind
+#kubectl apply -f https://kind.sigs.k8s.io/examples/loadbalancer/metallb-configmap.yaml
+#Modify below IP Subnet with same subnet got in above command output
+sudo kubectl create -f - << EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: metallb-system
+  name: config
+data:
+  config: |
+    address-pools:
+    - name: default
+      protocol: layer2
+      addresses:
+      - 172.18.255.200-172.18.255.250
+EOF
+
+#Add Helm Repo
+sudo helm repo add stable https://charts.helm.sh/stable
+sudo helm repo add bitnami https://charts.bitnami.com/bitnami
+sudo helm repo add jetstack https://charts.jetstack.io
+sudo helm repo add orc8r https://artifactory.magmacore.org/artifactory/helm/
+sudo helm repo add elastic https://helm.elastic.co
+sudo helm repo update
+
+#Install cert-manager:
+sudo helm install cert-manager jetstack/cert-manager \
+  --create-namespace \
+  --namespace cert-manager \
+  --set installCRDs=true
+
+#create new namespace:
+sudo kubectl create ns orc8r
+
+# switch namespace to orc8r
+sudo kubens orc8r
+
+#Install stable/mysql
+sudo helm install mysql \
+  --namespace orc8r \
+  --set mysqlRootPassword=password,mysqlUser=magma,mysqlPassword=password,mysqlDatabase=magma \
+    stable/mysql
+
+
+sudo helm install postgresql bitnami/postgresql \
+  --set postgresqlPassword=postgres \
+  --set postgresqlDatabase=magma \
+  --set fullnameOverride=postgresql
+
+cd magma-local
+#Update schema for Magma. Replace mysql pod name before executing
+sudo kubectl exec -it mysql-76fc7895fc-xvn6q -- mysql -u root --password=password < db_setup.sql
+
+#Now Install ORC8R from prod directory checked-out with magma-local
+cd prod
+sudo mkdir certs
+cd certs
+sudo ../01-generate-secrets.sh
+
+#sudo helm repo add magma-charts-152 https://shubhamtatvamasi.github.io/magma-charts-152
+#sudo helm repo update
+
+sudo chmod +r *
+
+#sudo helm template orc8r magma-charts-152/secrets \
+#  --set secret.certs.enabled=true \
+#  --set-file secret.certs.files."rootCA\.pem"=rootCA.pem \
+#  --set-file secret.certs.files."rootCA\.key"=rootCA.key \
+#  --set-file secret.certs.files."controller\.crt"=controller.crt \
+#  --set-file secret.certs.files."controller\.key"=controller.key \
+#  --set-file secret.certs.files."admin_operator\.pem"=admin_operator.pem \
+#  --set-file secret.certs.files."admin_operator\.pfx"=admin_operator.pfx \
+#  --set-file secret.certs.files."admin_operator\.key\.pem"=admin_operator.key.pem \
+#  --set-file secret.certs.files."fluentd\.pem"=fluentd.pem \
+#  --set-file secret.certs.files."fluentd\.key"=fluentd.key \
+#  --set-file secret.certs.files."bootstrapper\.key"=bootstrapper.key \
+#  --set-file secret.certs.files."certifier\.key"=certifier.key \
+#  --set-file secret.certs.files."certifier\.pem"=certifier.pem \
+#  --set-file secret.certs.files."nms_nginx\.key\.pem"=nms_nginx.key.pem \
+#  --set-file secret.certs.files."nms_nginx\.pem"=nms_nginx.pem \
+#  --set=docker.registry=docker.io \
+#  --set=docker.username=username \
+#  --set=docker.password=password |
+#sudo kubectl apply -f -
+
+sudo helm template orc8r ../magma-charts/charts/secrets \
+  --set secret.certs.enabled=true \
+  --set-file secret.certs.files."rootCA\.pem"=rootCA.pem \
+  --set-file secret.certs.files."rootCA\.key"=rootCA.key \
+  --set-file secret.certs.files."controller\.crt"=controller.crt \
+  --set-file secret.certs.files."controller\.key"=controller.key \
+  --set-file secret.certs.files."admin_operator\.pem"=admin_operator.pem \
+  --set-file secret.certs.files."admin_operator\.pfx"=admin_operator.pfx \
+  --set-file secret.certs.files."admin_operator\.key\.pem"=admin_operator.key.pem \
+  --set-file secret.certs.files."fluentd\.pem"=fluentd.pem \
+  --set-file secret.certs.files."fluentd\.key"=fluentd.key \
+  --set-file secret.certs.files."bootstrapper\.key"=bootstrapper.key \
+  --set-file secret.certs.files."certifier\.key"=certifier.key \
+  --set-file secret.certs.files."certifier\.pem"=certifier.pem \
+  --set-file secret.certs.files."nms_nginx\.key\.pem"=nms_nginx.key.pem \
+  --set-file secret.certs.files."nms_nginx\.pem"=nms_nginx.pem \
+  --set=docker.registry=$IMAGE_REGISTRY_URL \
+  --set=docker.username=$IMAGE_REGISTRY_USERNAME \
+  --set=docker.password=$IMAGE_REGISTRY_PASSWORD |
+sudo kubectl apply -f -
+
+
+sudo kubectl apply -f ../volume_claims.yaml
+
+#sudo helm repo add orc8r https://artifactory.magmacore.org/artifactory/helm/
+#sudo helm repo update
+
+#cd ../
+
+#Installing nginx
+#sudo helm upgrade -i orc8r orc8r/orc8r -f ../values.yaml \
+#  --version=1.5.23 \
+#  --set nginx.spec.hostname=controller.magmalocal.com
+
+sudo helm upgrade -i orc8r orc8r/orc8r -f ../values.yaml \
+  --version=1.5.23 \
+  --set nginx.spec.hostname=controller.magmalocal.com
+#Sit back and grap your coffee... Depending on network speed and availability of your images locally, it may take few minutes.
+
+#Check whether all pods are running
+sudo kubectl get pods 
+
+#Output shouls be something like below
+#techm@techm:~/SingH$ sudo kubectl get pods
+#NAME                                             READY   STATUS    RESTARTS   AGE
+#mysql-76fc7895fc-7k69l                           1/1     Running   0          46m
+#nms-magmalte-9f48cbf8d-qtpvt                     1/1     Running   0          10m
+#nms-nginx-proxy-6945599cf5-m98dl                 1/1     Running   0          10m
+#orc8r-accessd-57664b6587-q6kdx                   1/1     Running   0          10m
+#orc8r-alertmanager-55db97f4b7-lddlr              1/1     Running   0          10m
+#orc8r-alertmanager-configurer-58f6687489-ljvzc   1/1     Running   0          10m
+#orc8r-analytics-5f5cdd5497-8wgtx                 1/1     Running   0          10m
+#orc8r-bootstrapper-76847f5c84-vqr5m              1/1     Running   0          10m
+#orc8r-certifier-5f988f66cc-hc548                 1/1     Running   0          10m
+#orc8r-configurator-b9996f89c-5qqjd               1/1     Running   0          10m
+#orc8r-ctraced-7b5c777b99-vjjf5                   1/1     Running   0          10m
+#orc8r-device-755b9746db-qb54p                    1/1     Running   0          10m
+#orc8r-directoryd-74c85bc585-7drz4                1/1     Running   0          10m
+#orc8r-dispatcher-6796975b4d-jkjf6                1/1     Running   0          10m
+#orc8r-eventd-7f85987bc9-bdjwf                    1/1     Running   0          10m
+#orc8r-metricsd-58fc79f9bd-kfkjl                  1/1     Running   0          10m
+#orc8r-nginx-f78fb9d48-q4zql                      1/1     Running   0          10m
+#orc8r-obsidian-f8c68df6d-d5cdm                   1/1     Running   0          10m
+#orc8r-orchestrator-7cbd649799-5hhlr              1/1     Running   0          10m
+#orc8r-prometheus-6546b6755b-8qcwq                1/1     Running   0          10m
+#orc8r-prometheus-cache-568f79478-tdbk5           1/1     Running   0          10m
+#orc8r-prometheus-configurer-8664df9948-f7kxh     1/1     Running   0          10m
+#orc8r-service-registry-5784b98c6f-hgszq          1/1     Running   0          10m
+#orc8r-state-77456b594-w2j98                      1/1     Running   0          10m
+#orc8r-streamer-6c98c6d6b6-nl98p                  1/1     Running   0          10m
+#orc8r-tenants-6d8b7cc974-46rlg                   1/1     Running   0          10m
+#orc8r-user-grafana-79658fd6f4-xwjc8              1/1     Running   0          10m
+#postgresql-0                                     1/1     Running   0          46m
+
+
+#Installing other orc8r components i.e. lte feg cwf wifi fbinternal etc.
+sudo ../02-install-extra-orc8r-charts.sh
+
+
+#ORC_POD=$(kubectl get pod -l app.kubernetes.io/component=orchestrator -o jsonpath='{.items[0].metadata.name}')
+#kubectl exec -it ${ORC_POD} -- envdir /var/opt/magma/envdir /var/opt/magma/bin/accessc \
+#  add-existing -admin -cert /var/opt/magma/certs/admin_operator.pem admin_operator
+
+#NMS_POD=$(kubectl get pod -l app.kubernetes.io/component=magmalte -o jsonpath='{.items[0].metadata.name}')
+#kubectl exec -it ${NMS_POD} -- yarn setAdminPassword master admin admin
+#kubectl exec -it ${NMS_POD} -- yarn setAdminPassword magma-test admin admin
+
+
+#cd ../charts/
+
+#sudo helm repo add elastic https://helm.elastic.co
+#sudo helm repo update
+
+#sudo helm upgrade -i fluentd stable/fluentd -f fluentd.yaml
+
+
+#Try to tune CPU in both elasticsearch-master.yaml and elasticsearch-data.yaml accrodingly. Make it to 1.
+#sudo helm upgrade -i elasticsearch-master elastic/elasticsearch \
+#  -f elasticsearch-master.yaml
+
+#sudo helm upgrade -i elasticsearch-data elastic/elasticsearch \
+#  -f elasticsearch-data.yaml
+
+#sudo helm upgrade -i elasticsearch-data2 elastic/elasticsearch \
+#  -f elasticsearch-data2.yaml
+
+#sudo helm upgrade -i elasticsearch-curator stable/elasticsearch-curator \
+#  -f elasticsearch-curator.yaml
+
+#sudo helm upgrade -i kibana stable/kibana -f kibana.yaml
+
+../03-install-fluentd-elastic-kibana.sh
+
+#Sit back and grab another coffee, as it will take 10+ minutes to come elasticsearch pod up.
+
+#Create Users for orchestrator and magmalte
+sudo ../04-create-users.sh
+
+#Generate DNS and put the content into /etc/hosts
+sudo ../05-generate-dns.sh
+
+#Enable port forwarding if want to open using localhost
+sudo kubectl --namespace orc8r port-forward svc/orc8r-nginx-proxy 7443:8443 7444:8444 9443:443
+
+#sudo kubectl --namespace orc8r port-forward svc/nginx-proxy 8081:443
+
+#Do import the admin_operator.pfx certificate in browser before you acces NMS UI and Swagger UI. Add Exception if occurred.
+
+#To open NMS UI, put DNS of magma-test.nms.<domainname> in browser.
+#To open swagger UI put https://localhost:9443/swagger/v1/ui/ in browser. Add Exception if occurred.
